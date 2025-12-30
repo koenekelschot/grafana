@@ -35,6 +35,7 @@ Most [generally available](https://grafana.com/docs/release-life-cycle/#general-
 | `awsAsyncQueryCaching`                | Enable caching for async queries for Redshift and Athena. Requires that the datasource has caching and async query support enabled                            | Yes                |
 | `dashgpt`                             | Enable AI powered features in dashboards                                                                                                                      | Yes                |
 | `kubernetesDashboards`                | Use the kubernetes API in the frontend for dashboards                                                                                                         | Yes                |
+| `cloudWatchBatchQueries`              | Runs CloudWatch metrics queries as separate batches                                                                                                           | Yes                |
 | `dashboardSceneForViewers`            | Enables dashboard rendering using Scenes for viewer roles                                                                                                     | Yes                |
 | `dashboardSceneSolo`                  | Enables rendering dashboards using scenes for solo panels                                                                                                     | Yes                |
 | `dashboardScene`                      | Enables dashboard rendering using scenes for all roles                                                                                                        | Yes                |
@@ -83,7 +84,6 @@ Most [generally available](https://grafana.com/docs/release-life-cycle/#general-
 | `enableDatagridEditing`           | Enables the edit functionality in the datagrid panel                                                   |
 | `reportingRetries`                | Enables rendering retries for the reporting feature                                                    |
 | `externalServiceAccounts`         | Automatic service account and token setup for plugins                                                  |
-| `cloudWatchBatchQueries`          | Runs CloudWatch metrics queries as separate batches                                                    |
 | `dashboardNewLayouts`             | Enables new dashboard layouts                                                                          |
 | `pdfTables`                       | Enables generating table data as PDF in reporting                                                      |
 | `canvasPanelPanZoom`              | Allow pan and zoom in canvas panel                                                                     |
