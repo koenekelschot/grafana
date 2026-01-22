@@ -2268,6 +2268,14 @@ var (
 			HideFromDocs: true,
 			Expression:   "false",
 		},
+		{
+			Name:         "flameGraphWithCallTree",
+			Description:  "Enables the new Flame Graph UI containing the Call Tree view",
+			Stage:        FeatureStageExperimental,
+			Owner:        grafanaObservabilityTracesAndProfilingSquad,
+			FrontendOnly: true,
+			Expression:   "false",
+		},
 	}
 )
 
