@@ -18,7 +18,7 @@ type contextSessionTxKey struct{}
 
 // Implements contracts.Tx
 type Tx struct {
-	// Ended on rollback/commit
+	// Ends on rollback/commit
 	span   trace.Span
 	tx     *sqlx.Tx
 	nested bool
