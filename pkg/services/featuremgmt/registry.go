@@ -18,13 +18,6 @@ var (
 	// Register each toggle here
 	standardFeatureFlags = []FeatureFlag{
 		{
-			Name:        "disableEnvelopeEncryption",
-			Description: "Disable envelope encryption (emergency only)",
-			Stage:       FeatureStageGeneralAvailability,
-			Owner:       grafanaOperatorExperienceSquad,
-			Expression:  "false",
-		},
-		{
 			Name:        "panelTitleSearch",
 			Description: "Search for dashboards using panel title",
 			Stage:       FeatureStagePublicPreview,
@@ -568,22 +561,6 @@ var (
 			Owner:           identityAccessTeam,
 		},
 		{
-			Name:         "dashboardSceneForViewers",
-			Description:  "Enables dashboard rendering using Scenes for viewer roles",
-			Stage:        FeatureStageGeneralAvailability,
-			FrontendOnly: true,
-			Owner:        grafanaDashboardsSquad,
-			Expression:   "true", // enabled by default
-		},
-		{
-			Name:         "dashboardSceneSolo",
-			Description:  "Enables rendering dashboards using scenes for solo panels",
-			Stage:        FeatureStageGeneralAvailability,
-			FrontendOnly: true,
-			Owner:        grafanaDashboardsSquad,
-			Expression:   "true", // enabled by default
-		},
-		{
 			Name:         "dashboardScene",
 			Description:  "Enables dashboard rendering using scenes for all roles",
 			Stage:        FeatureStageGeneralAvailability,
@@ -1010,14 +987,6 @@ var (
 			Owner:        identityAccessTeam,
 			HideFromDocs: true,
 			Expression:   "false",
-		},
-		{
-			Name:            "ssoSettingsLDAP",
-			Description:     "Use the new SSO Settings API to configure LDAP",
-			Stage:           FeatureStageGeneralAvailability,
-			Owner:           identityAccessTeam,
-			RequiresRestart: true,
-			Expression:      "true", // enabled by default
 		},
 		{
 			Name:         "zanzana",
