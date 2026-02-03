@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -26,6 +27,7 @@ var _ contracts.SecureValueService = (*SecureValueService)(nil)
 
 type SecureValueService struct {
 	tracer                     trace.Tracer
+	db                         contracts.Database
 	accessClient               claims.AccessClient
 	secureValueMetadataStorage contracts.SecureValueMetadataStorage
 	secureValueValidator       contracts.SecureValueValidator
@@ -37,6 +39,7 @@ type SecureValueService struct {
 
 func ProvideSecureValueService(
 	tracer trace.Tracer,
+	db contracts.Database,
 	accessClient claims.AccessClient,
 	secureValueMetadataStorage contracts.SecureValueMetadataStorage,
 	secureValueValidator contracts.SecureValueValidator,
@@ -47,6 +50,7 @@ func ProvideSecureValueService(
 ) contracts.SecureValueService {
 	return &SecureValueService{
 		tracer:                     tracer,
+		db:                         db,
 		accessClient:               accessClient,
 		secureValueMetadataStorage: secureValueMetadataStorage,
 		secureValueValidator:       secureValueValidator,
@@ -89,6 +93,15 @@ func (s *SecureValueService) Create(ctx context.Context, sv *secretv1beta1.Secur
 
 		s.metrics.SecureValueCreateDuration.WithLabelValues(strconv.FormatBool(success)).Observe(time.Since(start).Seconds())
 	}()
+
+	// Always commit, the transaction is just to make sure the
+	// ForUpdate lock is held for the whole request
+	ctx, tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("starting database transaction: %w", err)
+	}
+	// Always commit to ensure the secure value metadata is stored in the database for the gc worker to clean up later
+	defer func() { createErr = errors.Join(createErr, tx.Commit()) }()
 
 	// Secure value creation uses the active keeper
 	keeperName, keeperCfg, err := s.keeperMetadataStorage.GetActiveKeeperConfig(ctx, sv.Namespace, contracts.ReadOpts{ForUpdate: true})
@@ -135,6 +148,15 @@ func (s *SecureValueService) Update(ctx context.Context, newSecureValue *secretv
 	if err != nil {
 		return nil, false, fmt.Errorf("reading secure value secret: %+w", err)
 	}
+
+	// Always commit, the transaction is just to make sure the
+	// ForUpdate lock is held for the whole request
+	ctx, tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return nil, false, fmt.Errorf("starting database transaction: %w", err)
+	}
+	// Always commit to ensure the secure value metadata is stored in the database for the gc worker to clean up later
+	defer func() { updateErr = errors.Join(updateErr, tx.Commit()) }()
 
 	keeperCfg, err := s.keeperMetadataStorage.GetKeeperConfig(ctx, currentVersion.Namespace, currentVersion.Status.Keeper, contracts.ReadOpts{ForUpdate: true})
 	if err != nil {
@@ -369,8 +391,7 @@ func (s *SecureValueService) Delete(ctx context.Context, namespace xkube.Namespa
 		s.metrics.SecureValueDeleteDuration.WithLabelValues(strconv.FormatBool(success)).Observe(time.Since(start).Seconds())
 	}()
 
-	// TODO: does this need to be for update?
-	sv, err := s.secureValueMetadataStorage.Read(ctx, namespace, name, contracts.ReadOpts{ForUpdate: true})
+	sv, err := s.secureValueMetadataStorage.Read(ctx, namespace, name, contracts.ReadOpts{})
 	if err != nil {
 		return nil, fmt.Errorf("fetching secure value: %+w", err)
 	}

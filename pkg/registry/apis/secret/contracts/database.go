@@ -5,9 +5,14 @@ import (
 	"database/sql"
 )
 
+type Tx interface {
+	Commit() error
+	Rollback() error
+}
+
 type Database interface {
 	DriverName() string
-	Transaction(ctx context.Context, f func(context.Context) error) error
+	Begin(ctx context.Context) (context.Context, Tx, error)
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 	QueryContext(ctx context.Context, query string, args ...any) (Rows, error)
 }

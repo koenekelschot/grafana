@@ -87,39 +87,42 @@ func (s *keeperMetadataStorage) Create(ctx context.Context, keeper *secretv1beta
 		return nil, fmt.Errorf("execute template %q: %w", sqlKeeperCreate.Name(), err)
 	}
 
-	err = s.db.Transaction(ctx, func(ctx context.Context) error {
-		// Validate before inserting that any `secureValues` referenced exist and do not reference other third-party keepers.
-		if err := s.validateSecureValueReferences(ctx, keeper); err != nil {
-			return err
-		}
-
-		result, err := s.db.ExecContext(ctx, query, req.GetArgs()...)
-		if err != nil {
-			if sql.IsRowAlreadyExistsError(err) {
-				return fmt.Errorf("namespace=%s name=%s: %w", keeper.Namespace, keeper.Name, contracts.ErrKeeperAlreadyExists)
-			}
-
-			return fmt.Errorf("inserting row: %w", err)
-		}
-
-		rowsAffected, err := result.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("getting rows affected: %w", err)
-		}
-
-		if rowsAffected != 1 {
-			return fmt.Errorf("expected 1 row affected, got %d for %s on %s", rowsAffected, keeper.Name, keeper.Namespace)
-		}
-
-		return nil
-	})
+	ctx, tx, err := s.db.Begin(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("db failure: %w", err)
+		return nil, fmt.Errorf("starting db transaction: %w", err)
+	}
+	defer func() { createErr = errors.Join(createErr, tx.Rollback()) }()
+
+	// Validate before inserting that any `secureValues` referenced exist and do not reference other third-party keepers.
+	if err := s.validateSecureValueReferences(ctx, keeper); err != nil {
+		return nil, err
+	}
+
+	result, err := s.db.ExecContext(ctx, query, req.GetArgs()...)
+	if err != nil {
+		if sql.IsRowAlreadyExistsError(err) {
+			return nil, fmt.Errorf("namespace=%s name=%s: %w", keeper.Namespace, keeper.Name, contracts.ErrKeeperAlreadyExists)
+		}
+
+		return nil, fmt.Errorf("inserting row: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("getting rows affected: %w", err)
+	}
+
+	if rowsAffected != 1 {
+		return nil, fmt.Errorf("expected 1 row affected, got %d for %s on %s", rowsAffected, keeper.Name, keeper.Namespace)
 	}
 
 	createdKeeper, err := row.toKubernetes()
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert to kubernetes object: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("committing db transaction: %w", err)
 	}
 
 	return createdKeeper, nil
@@ -239,52 +242,54 @@ func (s *keeperMetadataStorage) Update(ctx context.Context, newKeeper *secretv1b
 
 	var newRow *keeperDB
 
-	err := s.db.Transaction(ctx, func(ctx context.Context) error {
-		// Validate before updating that any `secureValues` referenced exists and does not reference other third-party keepers.
-		if err := s.validateSecureValueReferences(ctx, newKeeper); err != nil {
-			return err
-		}
+	ctx, tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("starting db transaction: %w", err)
+	}
+	defer func() { updateErr = errors.Join(updateErr, tx.Rollback()) }()
 
-		// Read old value first.
-		oldKeeperRow, err := s.read(ctx, newKeeper.Namespace, newKeeper.Name, contracts.ReadOpts{ForUpdate: true})
-		if err != nil {
-			return err
-		}
+	// Validate before updating that any `secureValues` referenced exists and does not reference other third-party keepers.
+	if err := s.validateSecureValueReferences(ctx, newKeeper); err != nil {
+		return nil, err
+	}
 
-		// Generate an update row model.
-		var updateErr error
-		newRow, updateErr = toKeeperUpdateRow(oldKeeperRow, newKeeper, actorUID)
-		if updateErr != nil {
-			return fmt.Errorf("failed to map into update row: %w", updateErr)
-		}
+	// Read old value first.
+	oldKeeperRow, err := s.read(ctx, newKeeper.Namespace, newKeeper.Name, contracts.ReadOpts{ForUpdate: true})
+	if err != nil {
+		return nil, err
+	}
 
-		// Update query with new model.
-		req := &updateKeeper{
-			SQLTemplate: sqltemplate.New(s.dialect),
-			Row:         newRow,
-		}
+	// Generate an update row model.
+	newRow, updateErr = toKeeperUpdateRow(oldKeeperRow, newKeeper, actorUID)
+	if updateErr != nil {
+		return nil, fmt.Errorf("failed to map into update row: %w", updateErr)
+	}
 
-		query, err := sqltemplate.Execute(sqlKeeperUpdate, req)
-		if err != nil {
-			return fmt.Errorf("execute template %q: %w", sqlKeeperUpdate.Name(), err)
-		}
+	// Update query with new model.
+	req := &updateKeeper{
+		SQLTemplate: sqltemplate.New(s.dialect),
+		Row:         newRow,
+	}
 
-		result, err := s.db.ExecContext(ctx, query, req.GetArgs()...)
-		if err != nil {
-			return fmt.Errorf("updating row: %w", err)
-		}
+	query, err := sqltemplate.Execute(sqlKeeperUpdate, req)
+	if err != nil {
+		return nil, fmt.Errorf("execute template %q: %w", sqlKeeperUpdate.Name(), err)
+	}
 
-		rowsAffected, err := result.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("getting rows affected: %w", err)
-		}
+	result, err := s.db.ExecContext(ctx, query, req.GetArgs()...)
+	if err != nil {
+		return nil, fmt.Errorf("updating row: %w", err)
+	}
 
-		if rowsAffected != 1 {
-			return fmt.Errorf("expected 1 row affected, got %d for %s on %s", rowsAffected, newKeeper.Name, newKeeper.Namespace)
-		}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("getting rows affected: %w", err)
+	}
 
-		return nil
-	})
+	if rowsAffected != 1 {
+		return nil, fmt.Errorf("expected 1 row affected, got %d for %s on %s", rowsAffected, newKeeper.Name, newKeeper.Namespace)
+	}
+
 	if err != nil {
 		return nil, fmt.Errorf("db failure: %w", err)
 	}
@@ -292,6 +297,10 @@ func (s *keeperMetadataStorage) Update(ctx context.Context, newKeeper *secretv1b
 	keeper, err := newRow.toKubernetes()
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert to kubernetes object: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("committing db transaction: %w", err)
 	}
 
 	return keeper, nil
@@ -325,49 +334,55 @@ func (s *keeperMetadataStorage) Delete(ctx context.Context, namespace xkube.Name
 		s.metrics.KeeperMetadataDeleteDuration.WithLabelValues(strconv.FormatBool(success)).Observe(time.Since(start).Seconds())
 	}()
 
-	return s.db.Transaction(ctx, func(ctx context.Context) error {
-		// Lock the keeper row
-		_, err := s.read(ctx, namespace.String(), name, contracts.ReadOpts{ForUpdate: true})
-		if err != nil {
-			return fmt.Errorf("reading keeper for update: ns=%+v name=%+v: %w", namespace, name, err)
-		}
+	ctx, tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("starting db transaction: %w", err)
+	}
+	defer func() { delErr = errors.Join(delErr, tx.Rollback()) }()
 
-		exists, err := s.existsSecureValueUsingKeeper(ctx, namespace, name)
-		if err != nil {
-			return fmt.Errorf("checking if there exists a secure value using the keeper: ns=%+v name=%+v: %w", namespace, name, err)
-		}
-		if exists {
-			return fmt.Errorf("keeper is being used: namespace=%+v name+%+v :%w", namespace, name, contracts.ErrKeeperIsBeingUsedBySecureValue)
-		}
+	// Lock the keeper row
+	if _, err := s.read(ctx, namespace.String(), name, contracts.ReadOpts{ForUpdate: true}); err != nil {
+		return fmt.Errorf("reading keeper for update: ns=%+v name=%+v: %w", namespace, name, err)
+	}
 
-		req := deleteKeeper{
-			SQLTemplate: sqltemplate.New(s.dialect),
-			Namespace:   namespace.String(),
-			Name:        name,
-		}
+	exists, err := s.existsSecureValueUsingKeeper(ctx, namespace, name)
+	if err != nil {
+		return fmt.Errorf("checking if there exists a secure value using the keeper: ns=%+v name=%+v: %w", namespace, name, err)
+	}
+	if exists {
+		return fmt.Errorf("keeper is being used: namespace=%+v name+%+v :%w", namespace, name, contracts.ErrKeeperIsBeingUsedBySecureValue)
+	}
 
-		query, err := sqltemplate.Execute(sqlKeeperDelete, req)
-		if err != nil {
-			return fmt.Errorf("execute template %q: %w", sqlKeeperDelete.Name(), err)
-		}
+	req := deleteKeeper{
+		SQLTemplate: sqltemplate.New(s.dialect),
+		Namespace:   namespace.String(),
+		Name:        name,
+	}
 
-		result, err := s.db.ExecContext(ctx, query, req.GetArgs()...)
-		if err != nil {
-			return fmt.Errorf("deleting row: %w", err)
-		}
+	query, err := sqltemplate.Execute(sqlKeeperDelete, req)
+	if err != nil {
+		return fmt.Errorf("execute template %q: %w", sqlKeeperDelete.Name(), err)
+	}
 
-		rowsAffected, err := result.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("getting rows affected: %w", err)
-		}
-		if rowsAffected == 0 {
-			return contracts.ErrKeeperNotFound
-		} else if rowsAffected != 1 {
-			return fmt.Errorf("expected 1 row affected, got %d for %s on %s", rowsAffected, name, namespace)
-		}
+	result, err := s.db.ExecContext(ctx, query, req.GetArgs()...)
+	if err != nil {
+		return fmt.Errorf("deleting row: %w", err)
+	}
 
-		return nil
-	})
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("getting rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return contracts.ErrKeeperNotFound
+	} else if rowsAffected != 1 {
+		return fmt.Errorf("expected 1 row affected, got %d for %s on %s", rowsAffected, name, namespace)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing db transaction: %w", err)
+	}
+	return nil
 }
 
 func (s *keeperMetadataStorage) existsSecureValueUsingKeeper(ctx context.Context, namespace xkube.Namespace, keeperName string) (bool, error) {

@@ -6,7 +6,6 @@ import (
 	"errors"
 
 	"github.com/jmoiron/sqlx"
-	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/grafana/grafana/pkg/infra/db"
@@ -16,6 +15,48 @@ import (
 
 // contextSessionTxKey is the key used to store the transaction in the context.
 type contextSessionTxKey struct{}
+
+// Implements contracts.Tx
+type Tx struct {
+	// Ended on rollback/commit
+	span   trace.Span
+	tx     *sqlx.Tx
+	nested bool
+}
+
+func (tx *Tx) Commit() error {
+	if tx.nested {
+		return nil
+	}
+	err := tx.tx.Commit()
+	if errors.Is(err, sql.ErrTxDone) {
+		return nil
+	}
+	if tx.span != nil {
+		if err != nil {
+			tx.span.RecordError(err)
+		}
+		tx.span.End()
+	}
+	return err
+}
+func (tx *Tx) Rollback() error {
+	if tx.nested {
+		return nil
+	}
+
+	err := tx.tx.Rollback()
+	if errors.Is(err, sql.ErrTxDone) {
+		return nil
+	}
+	if tx.span != nil {
+		if err != nil {
+			tx.span.RecordError(err)
+		}
+		tx.span.End()
+	}
+	return err
+}
 
 // Implements contracts.Database
 type Database struct {
@@ -52,41 +93,24 @@ func (db *Database) DriverName() string {
 	return db.dbType
 }
 
-func (db *Database) Transaction(ctx context.Context, callback func(context.Context) error) (err error) {
+func (db *Database) Begin(ctx context.Context) (context.Context, contracts.Tx, error) {
 	// If another transaction is already open, we just use that one instead of nesting.
 	sqlxTx, ok := ctx.Value(contextSessionTxKey{}).(*sqlx.Tx)
 	if sqlxTx != nil && ok {
 		// We are already in a transaction, so we don't commit or rollback, let the outermost transaction do it.
-		return callback(ctx)
+		return ctx, &Tx{tx: sqlxTx, nested: true}, nil
 	}
 
-	spanCtx, span := db.tracer.Start(ctx, "Database.Transaction")
-	defer span.End()
+	spanCtx, span := db.tracer.Start(ctx, "Database.Begin")
 
-	defer func() {
-		if err != nil {
-			span.SetStatus(codes.Error, "Transaction failed")
-			span.RecordError(err)
-		}
-	}()
-
-	sqlxTx, err = db.sqlx.BeginTxx(spanCtx, nil)
+	sqlxTx, err := db.sqlx.BeginTxx(spanCtx, nil)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 
 	// Save it in the context so the transaction can be reused in case it is nested.
-	txCtx := context.WithValue(spanCtx, contextSessionTxKey{}, sqlxTx)
-
-	if err := callback(txCtx); err != nil {
-		if rbErr := sqlxTx.Rollback(); rbErr != nil {
-			return errors.Join(err, rbErr)
-		}
-
-		return err
-	}
-
-	return sqlxTx.Commit()
+	txCtx := context.WithValue(ctx, contextSessionTxKey{}, sqlxTx)
+	return txCtx, &Tx{span: span, tx: sqlxTx}, nil
 }
 
 func (db *Database) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
