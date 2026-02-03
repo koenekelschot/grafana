@@ -290,10 +290,6 @@ func (s *keeperMetadataStorage) Update(ctx context.Context, newKeeper *secretv1b
 		return nil, fmt.Errorf("expected 1 row affected, got %d for %s on %s", rowsAffected, newKeeper.Name, newKeeper.Namespace)
 	}
 
-	if err != nil {
-		return nil, fmt.Errorf("db failure: %w", err)
-	}
-
 	keeper, err := newRow.toKubernetes()
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert to kubernetes object: %w", err)
